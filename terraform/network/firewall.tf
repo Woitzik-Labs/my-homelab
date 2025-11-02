@@ -45,69 +45,8 @@ resource "routeros_ip_firewall_addr_list" "dmz_network" {
 }
 
 # ===============================================
-# IP Services Hardening (KORRIGIERT: 'numbers' wieder hinzugefügt)
-# ===============================================
-
-resource "routeros_ip_service" "ssh" {
-  name     = "ssh"
-  numbers  = "0" # WIEDER ERFORDERLICH
-  port     = 22
-  address  = "10.10.0.0/24"
-  disabled = false
-}
-
-resource "routeros_ip_service" "winbox" {
-  name     = "winbox"
-  numbers  = "1" # WIEDER ERFORDERLICH
-  port     = 8291
-  address  = "10.10.0.0/24"
-  disabled = false
-}
-
-resource "routeros_ip_service" "telnet" {
-  name     = "telnet"
-  numbers  = "2" # WIEDER ERFORDERLICH
-  port     = 23
-  disabled = true
-}
-
-resource "routeros_ip_service" "ftp" {
-  name     = "ftp"
-  numbers  = "3" # WIEDER ERFORDERLICH
-  port     = 21
-  disabled = true
-}
-
-resource "routeros_ip_service" "www" {
-  name     = "www"
-  numbers  = "4" # WIEDER ERFORDERLICH
-  port     = 80
-  disabled = true
-}
-
-resource "routeros_ip_service" "api" {
-  name     = "api"
-  numbers  = "5" # WIEDER ERFORDERLICH
-  port     = 8728
-  disabled = true
-}
-
-resource "routeros_ip_service" "api_ssl" {
-  name     = "api-ssl"
-  numbers  = "6" # WIEDER ERFORDERLICH
-  port     = 8729
-  disabled = true
-}
-
-# ===============================================
 # Firewall Filter - INPUT Chain
 # ===============================================
-
-resource "routeros_ip_firewall_filter" "drop_invalid" {
-  action           = "drop"
-  chain            = "input"
-  connection_state = "invalid"
-}
 
 resource "routeros_ip_firewall_filter" "accept_established_related_untracked" {
   action           = "accept"
@@ -116,10 +55,17 @@ resource "routeros_ip_firewall_filter" "accept_established_related_untracked" {
   place_before     = routeros_ip_firewall_filter.drop_invalid.id
 }
 
+resource "routeros_ip_firewall_filter" "drop_invalid" {
+  action           = "drop"
+  chain            = "input"
+  connection_state = "invalid"
+  place_before     = routeros_ip_firewall_filter.accept_icmp.id
+}
+
 resource "routeros_ip_firewall_filter" "accept_icmp" {
-  action     = "accept"
-  chain      = "input"
-  protocol   = "icmp"
+  action   = "accept"
+  chain    = "input"
+  protocol = "icmp"
   place_before = routeros_ip_firewall_filter.accept_management_from_pc.id
 }
 
@@ -127,22 +73,6 @@ resource "routeros_ip_firewall_filter" "accept_management_from_pc" {
   action      = "accept"
   chain       = "input"
   src_address = "10.10.0.0/24"
-  protocol    = "tcp"
-  dst_port    = "22,8291"
-  # KORRIGIERT: 'extra_args' entfernt, native Felder verwendet
-  limit       = "5/1s"
-  limit_burst = 5
-  place_before = routeros_ip_firewall_filter.drop_all_input.id
-}
-
-resource "routeros_ip_firewall_filter" "input_log_drop" {
-  action     = "log"
-  chain      = "input"
-  log        = "true"
-  log_prefix = "INPUT_DROP: "
-  # KORRIGIERT: 'extra_args' entfernt, native Felder verwendet
-  limit       = "5/1s"
-  limit_burst = 5
   place_before = routeros_ip_firewall_filter.drop_all_input.id
 }
 
@@ -174,36 +104,9 @@ resource "routeros_ip_firewall_filter" "fasttrack_connection" {
   chain            = "forward"
   connection_state = "established,related"
   hw_offload       = "true"
-  place_before     = routeros_ip_firewall_filter.accept_wan_to_dmz_new_http_https.id 
+  place_before     = routeros_ip_firewall_filter.allow_dmz_to_adguard_dns_tcp.id
 }
 
-# NEU: Erlaubt WAN -> DMZ, um die Probleme mit Jellyfin/Vaultwarden zu beheben
-resource "routeros_ip_firewall_filter" "accept_wan_to_dmz_new_http_https" {
-  action             = "accept"
-  chain              = "forward"
-  comment            = "NEW: Allow NEW WAN -> DMZ Reverse Proxy HTTP/HTTPS"
-  in_interface_list  = routeros_interface_list.wan.name
-  dst_address        = "10.30.0.2"
-  protocol           = "tcp"
-  dst_port           = "80,443"
-  connection_state   = "new"
-  place_before       = routeros_ip_firewall_filter.allow_dmz_to_adguard_dns_tcp.id
-}
-
-resource "routeros_ip_firewall_filter" "accept_wan_to_dmz_new_minecraft" {
-  action             = "accept"
-  chain              = "forward"
-  comment            = "NEW: Allow NEW WAN -> DMZ Minecraft"
-  in_interface_list  = routeros_interface_list.wan.name
-  dst_address        = "10.30.0.2"
-  protocol           = "tcp,udp"
-  dst_port           = "25565"
-  connection_state   = "new"
-  place_before       = routeros_ip_firewall_filter.allow_dmz_to_adguard_dns_tcp.id 
-}
-
-
-# DMZ -> PROD Backend Regeln (fortgesetzt)
 resource "routeros_ip_firewall_filter" "allow_dmz_to_adguard_dns_tcp" {
   action           = "accept"
   chain            = "forward"
@@ -256,7 +159,7 @@ resource "routeros_ip_firewall_filter" "allow_dmz_to_proxmox_http" {
   dst_address      = "10.20.0.10"
   protocol         = "tcp"
   dst_port         = "8006"
-  place_before     = routeros_ip_firewall_filter.allow_dmz_to_jf_http.id
+  place_before     = routeros_ip_firewall_filter.allow_dmz_to_qbt_http.id
 }
 
 resource "routeros_ip_firewall_filter" "allow_dmz_to_jf_http" {
@@ -456,20 +359,7 @@ resource "routeros_ip_firewall_filter" "drop_all_wan_not_dstnat" {
   connection_nat_state = "!dstnat"
   connection_state   = "new"
   in_interface_list  = "WAN"
-  log                = "true"
-  log_prefix         = "WAN_DROP_REMAINING: "
   place_before       = routeros_ip_firewall_filter.z_drop_all_forward.id
-}
-
-resource "routeros_ip_firewall_filter" "forward_log_drop" {
-  action     = "log"
-  chain      = "forward"
-  log        = "true"
-  log_prefix = "FORWARD_DROP: "
-  # KORRIGIERT: 'extra_args' entfernt, native Felder verwendet
-  limit       = "5/1s"
-  limit_burst = 5
-  place_before = routeros_ip_firewall_filter.z_drop_all_forward.id
 }
 
 resource "routeros_ip_firewall_filter" "z_drop_all_forward" {
@@ -481,16 +371,6 @@ resource "routeros_ip_firewall_filter" "z_drop_all_forward" {
 # ===============================================
 # Firewall NAT (DST-NAT/SRC-NAT)
 # ===============================================
-
-# NEU: Masquerade für Hairpin und WAN->DMZ-Antworten
-resource "routeros_ip_firewall_nat" "masquerade_hairpin_dstnat" {
-  chain              = "srcnat"
-  action             = "masquerade"
-  comment            = "NEW: SRC-NAT for Hairpin (LAN->DMZ) and DST-NATed replies"
-  out_interface_list = routeros_interface_list.lan.name  
-  dst_address        = "10.30.0.0/24" 
-  place_before       = routeros_ip_firewall_nat.masquerade.id 
-}
 
 resource "routeros_ip_firewall_nat" "masquerade" {
   chain              = "srcnat"
