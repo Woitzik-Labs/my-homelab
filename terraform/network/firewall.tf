@@ -25,23 +25,28 @@ resource "routeros_interface_list_member" "lan_bridge" {
 # ===============================================
 
 resource "routeros_ip_firewall_addr_list" "internal_networks_wlan" {
-  list      = "Internal_Networks"
-  address   = "192.168.178.0/24"
+  list    = "Internal_Networks"
+  address = "192.168.178.0/24"
 }
 
 resource "routeros_ip_firewall_addr_list" "internal_net_10" {
-  list      = routeros_ip_firewall_addr_list.internal_networks_wlan.list
-  address   = "10.10.0.0/24"
+  list    = routeros_ip_firewall_addr_list.internal_networks_wlan.list
+  address = "10.10.0.0/24"
 }
 
 resource "routeros_ip_firewall_addr_list" "internal_net_20" {
-  list      = routeros_ip_firewall_addr_list.internal_networks_wlan.list
-  address   = "10.20.0.0/24"
+  list    = routeros_ip_firewall_addr_list.internal_networks_wlan.list
+  address = "10.20.0.0/24"
 }
 
 resource "routeros_ip_firewall_addr_list" "dmz_network" {
-  list      = "DMZ_Network"
-  address   = "10.30.0.0/24"
+  list    = "DMZ_Network"
+  address = "10.30.0.0/24"
+}
+
+resource "routeros_ip_firewall_addr_list" "mgmt_devices" {
+  list    = "Mgmt_Devices"
+  address = "10.10.0.254"
 }
 
 # ===============================================
@@ -63,17 +68,17 @@ resource "routeros_ip_firewall_filter" "drop_invalid" {
 }
 
 resource "routeros_ip_firewall_filter" "accept_icmp" {
-  action   = "accept"
-  chain    = "input"
-  protocol = "icmp"
+  action       = "accept"
+  chain        = "input"
+  protocol     = "icmp"
   place_before = routeros_ip_firewall_filter.accept_management_from_pc.id
 }
 
 resource "routeros_ip_firewall_filter" "accept_management_from_pc" {
-  action      = "accept"
-  chain       = "input"
-  src_address = "10.10.0.0/24"
-  place_before = routeros_ip_firewall_filter.drop_all_input.id
+  action           = "accept"
+  chain            = "input"
+  src_address_list = routeros_ip_firewall_addr_list.mgmt_devices.list
+  place_before     = routeros_ip_firewall_filter.drop_all_input.id
 }
 
 resource "routeros_ip_firewall_filter" "drop_all_input" {
@@ -173,6 +178,17 @@ resource "routeros_ip_firewall_filter" "allow_dmz_to_jf_http" {
   place_before     = routeros_ip_firewall_filter.allow_dmz_to_qbt_http.id
 }
 
+resource "routeros_ip_firewall_filter" "allow_dmz_to_proxmox_vnc" {
+  action           = "accept"
+  chain            = "forward"
+  comment          = "DMZ to Prod: Proxmox VNC Web Console"
+  src_address_list = routeros_ip_firewall_addr_list.dmz_network.list
+  dst_address      = "10.20.0.10"
+  protocol         = "tcp"
+  dst_port         = "5900-5999"
+  place_before     = routeros_ip_firewall_filter.allow_dmz_to_qbt_http.id
+}
+
 resource "routeros_ip_firewall_filter" "allow_dmz_to_qbt_http" {
   action           = "accept"
   chain            = "forward"
@@ -203,7 +219,7 @@ resource "routeros_ip_firewall_filter" "allow_dmz_to_sa_http" {
   dst_address      = "10.20.0.101"
   protocol         = "tcp"
   dst_port         = "8989"
-  place_before     = routeros_ip_firewall_filter.drop_dmz_to_internal.id 
+  place_before     = routeros_ip_firewall_filter.drop_dmz_to_internal.id
 }
 
 resource "routeros_ip_firewall_filter" "drop_dmz_to_internal" {
@@ -245,38 +261,20 @@ resource "routeros_ip_firewall_filter" "allow_vlan30_to_internet" {
 }
 
 resource "routeros_ip_firewall_filter" "allow_pc_to_prod" {
-  action      = "accept"
-  chain       = "forward"
-  comment     = "PC -> PROD (Client-Zugriff)"
-  src_address = "10.10.0.0/24"
-  dst_address = "10.20.0.0/24"
+  action       = "accept"
+  chain        = "forward"
+  comment      = "PC -> PROD (Client-Zugriff)"
+  src_address  = "10.10.0.0/24"
+  dst_address  = "10.20.0.0/24"
   place_before = routeros_ip_firewall_filter.allow_pc_to_dmz.id
 }
 
 resource "routeros_ip_firewall_filter" "allow_pc_to_dmz" {
-  action      = "accept"
-  chain       = "forward"
-  comment     = "PC -> DMZ (Client-Zugriff)"
-  src_address = "10.10.0.0/24"
-  dst_address = "10.30.0.0/24"
-  place_before = routeros_ip_firewall_filter.allow_wlan_to_prod.id
-}
-
-resource "routeros_ip_firewall_filter" "allow_wlan_to_prod" {
-  action      = "accept"
-  chain       = "forward"
-  comment     = "WLAN -> PROD (Client-Zugriff)"
-  src_address = "192.168.178.0/24"
-  dst_address = "10.20.0.0/24"
-  place_before = routeros_ip_firewall_filter.allow_lan_to_dmz.id
-}
-
-resource "routeros_ip_firewall_filter" "allow_lan_to_dmz" {
-  action      = "accept"
-  chain       = "forward"
-  comment     = "WLAN -> DMZ (Client-Zugriff)"
-  src_address = "192.168.178.0/24"
-  dst_address = "10.30.0.0/24"
+  action       = "accept"
+  chain        = "forward"
+  comment      = "PC -> DMZ (Client-Zugriff)"
+  src_address  = "10.10.0.0/24"
+  dst_address  = "10.30.0.0/24"
   place_before = routeros_ip_firewall_filter.allow_fritzbox_to_prd_dns_tcp.id
 }
 
@@ -349,28 +347,72 @@ resource "routeros_ip_firewall_filter" "allow_fritzbox_to_dmz_minecraft_udp" {
   dst_address       = "10.30.0.2"
   protocol          = "udp"
   dst_port          = "25565"
-  place_before      = routeros_ip_firewall_filter.drop_all_wan_not_dstnat.id
+  place_before      = routeros_ip_firewall_filter.allow_wan_to_dstnat_tcp.id
+}
+
+resource "routeros_ip_firewall_filter" "allow_wan_to_dstnat_tcp" {
+  action               = "accept"
+  chain                = "forward"
+  comment              = "Allow incoming DST-NATed traffic (TCP)"
+  connection_nat_state = "dstnat"
+  connection_state     = "new"
+  in_interface_list    = "WAN"
+  protocol             = "tcp"
+  place_before         = routeros_ip_firewall_filter.allow_wan_to_dstnat_udp.id
+}
+
+resource "routeros_ip_firewall_filter" "allow_wan_to_dstnat_udp" {
+  action               = "accept"
+  chain                = "forward"
+  comment              = "Allow incoming DST-NATed traffic (UDP)"
+  connection_nat_state = "dstnat"
+  connection_state     = "new"
+  in_interface_list    = "WAN"
+  protocol             = "udp"
+  place_before         = routeros_ip_firewall_filter.drop_all_wan_not_dstnat.id
 }
 
 resource "routeros_ip_firewall_filter" "drop_all_wan_not_dstnat" {
-  action             = "drop"
-  chain              = "forward"
-  comment            = "Drop incoming WAN traffic not destined for a port-forward"
+  action               = "drop"
+  chain                = "forward"
+  comment              = "Drop incoming WAN traffic not destined for a port-forward"
   connection_nat_state = "!dstnat"
-  connection_state   = "new"
-  in_interface_list  = "WAN"
-  place_before       = routeros_ip_firewall_filter.z_drop_all_forward.id
+  connection_state     = "new"
+  in_interface_list    = "WAN"
+  place_before         = routeros_ip_firewall_filter.z_drop_all_forward.id
 }
 
 resource "routeros_ip_firewall_filter" "z_drop_all_forward" {
-  action = "drop"
-  chain  = "forward"
+  action  = "drop"
+  chain   = "forward"
   comment = "DROP EVERYTHING ELSE - FINAL ZERO TRUST POLICY"
 }
 
 # ===============================================
 # Firewall NAT (DST-NAT/SRC-NAT)
 # ===============================================
+
+resource "routeros_ip_firewall_nat" "hairpin_srcnat_fritzbox_to_dmz" {
+  action        = "masquerade"
+  chain         = "srcnat"
+  comment       = "Hairpin NAT: FritzBox (WAN) to DMZ"
+  src_address   = "192.168.178.0/24"
+  dst_address   = "10.30.0.0/24"
+  out_interface = routeros_interface_bridge.bridge.name
+  place_before  = routeros_ip_firewall_nat.hairpin_srcnat_fritzbox_to_prod.id
+}
+
+resource "routeros_ip_firewall_nat" "hairpin_srcnat_fritzbox_to_prod" {
+  action        = "masquerade"
+  chain         = "srcnat"
+  comment       = "Hairpin NAT: FritzBox (WAN) to PROD"
+  src_address   = "192.168.178.0/24"
+  dst_address   = "10.20.0.0/24"
+  out_interface = routeros_interface_bridge.bridge.name
+  place_before  = routeros_ip_firewall_nat.masquerade.id
+}
+
+# --- DEINE BESTEHENDEN NAT REGELN ---
 
 resource "routeros_ip_firewall_nat" "masquerade" {
   chain              = "srcnat"
