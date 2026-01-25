@@ -46,12 +46,34 @@ resource "routeros_ip_firewall_addr_list" "dmz_network" {
 
 resource "routeros_ip_firewall_addr_list" "mgmt_devices" {
   list    = "Mgmt_Devices"
-  address = "10.10.0.254"
+  address = "10.10.0.0/24"
+}
+
+resource "routeros_ip_firewall_addr_list" "proxy_backends" {
+  for_each = { for k, v in {
+    "adguard"     = "10.20.0.3"
+    "proxmox"     = "10.20.0.10"
+    "jellyfin"    = "10.20.0.101"
+    "vaultwarden" = "10.20.0.102"
+    "kuma"        = "10.20.0.104"
+    "homepage"    = "10.20.0.200"
+  } : k => v }
+
+  list    = "Reverse_Proxy_Targets"
+  address = each.value
 }
 
 # ===============================================
 # Firewall Filter - INPUT Chain
 # ===============================================
+
+resource "routeros_ip_firewall_filter" "drop_blacklisted" {
+  action   = "drop"
+  chain    = "input"
+  src_address_list = "Blacklist"
+  comment  = "Drop traffic from dynamically blacklisted IPs"
+  place_before = routeros_ip_firewall_filter.accept_established_related_untracked.id
+}
 
 resource "routeros_ip_firewall_filter" "accept_established_related_untracked" {
   action           = "accept"
@@ -68,9 +90,10 @@ resource "routeros_ip_firewall_filter" "drop_invalid" {
 }
 
 resource "routeros_ip_firewall_filter" "accept_icmp" {
-  action       = "accept"
-  chain        = "input"
-  protocol     = "icmp"
+  action   = "accept"
+  chain    = "input"
+  protocol = "icmp"
+  limit    = "5,5"
   place_before = routeros_ip_firewall_filter.accept_management_from_pc.id
 }
 
@@ -89,6 +112,15 @@ resource "routeros_ip_firewall_filter" "drop_all_input" {
 # ===============================================
 # Firewall Filter - FORWARD Chain
 # ===============================================
+
+resource "routeros_ip_firewall_mangle" "mss_clamp" {
+  action            = "change-mss"
+  chain             = "forward"
+  new_mss           = "clamp-to-pmtu"
+  out_interface_list = "WAN"
+  protocol          = "tcp"
+  tcp_flags         = "syn"
+}
 
 resource "routeros_ip_firewall_filter" "drop_invalid_forward" {
   action           = "drop"
@@ -131,94 +163,17 @@ resource "routeros_ip_firewall_filter" "allow_dmz_to_adguard_dns_udp" {
   dst_address      = "10.20.0.3"
   protocol         = "udp"
   dst_port         = "53"
-  place_before     = routeros_ip_firewall_filter.allow_dmz_to_adguard_http.id
+  place_before     = routeros_ip_firewall_filter.allow_dmz_to_backends.id
 }
 
-resource "routeros_ip_firewall_filter" "allow_dmz_to_adguard_http" {
+resource "routeros_ip_firewall_filter" "allow_dmz_to_backends" {
   action           = "accept"
   chain            = "forward"
-  comment          = "DMZ to Prod: AdGuard HTTP Backend (Reverse Proxy)"
-  src_address_list = routeros_ip_firewall_addr_list.dmz_network.list
-  dst_address      = "10.20.0.3"
   protocol         = "tcp"
-  dst_port         = "80"
-  place_before     = routeros_ip_firewall_filter.allow_dmz_to_vaultwarden_http.id
-}
-
-resource "routeros_ip_firewall_filter" "allow_dmz_to_vaultwarden_http" {
-  action           = "accept"
-  chain            = "forward"
-  comment          = "DMZ to Prod: Vaultwarden Backend (Reverse Proxy)"
+  comment          = "DMZ -> PROD: All defined Reverse Proxy Backends"
   src_address_list = routeros_ip_firewall_addr_list.dmz_network.list
-  dst_address      = "10.20.0.102"
-  protocol         = "tcp"
-  dst_port         = "8000"
-  place_before     = routeros_ip_firewall_filter.allow_dmz_to_proxmox_http.id
-}
-
-resource "routeros_ip_firewall_filter" "allow_dmz_to_proxmox_http" {
-  action           = "accept"
-  chain            = "forward"
-  comment          = "DMZ to Prod: Proxmox Backend (Reverse Proxy)"
-  src_address_list = routeros_ip_firewall_addr_list.dmz_network.list
-  dst_address      = "10.20.0.10"
-  protocol         = "tcp"
-  dst_port         = "8006"
-  place_before     = routeros_ip_firewall_filter.allow_dmz_to_qbt_http.id
-}
-
-resource "routeros_ip_firewall_filter" "allow_dmz_to_jf_http" {
-  action           = "accept"
-  chain            = "forward"
-  comment          = "DMZ to Prod: Jellyfin Backend (Reverse Proxy)"
-  src_address_list = routeros_ip_firewall_addr_list.dmz_network.list
-  dst_address      = "10.20.0.101"
-  protocol         = "tcp"
-  dst_port         = "8096"
-  place_before     = routeros_ip_firewall_filter.allow_dmz_to_qbt_http.id
-}
-
-resource "routeros_ip_firewall_filter" "allow_dmz_to_proxmox_vnc" {
-  action           = "accept"
-  chain            = "forward"
-  comment          = "DMZ to Prod: Proxmox VNC Web Console"
-  src_address_list = routeros_ip_firewall_addr_list.dmz_network.list
-  dst_address      = "10.20.0.10"
-  protocol         = "tcp"
-  dst_port         = "5900-5999"
-  place_before     = routeros_ip_firewall_filter.allow_dmz_to_qbt_http.id
-}
-
-resource "routeros_ip_firewall_filter" "allow_dmz_to_qbt_http" {
-  action           = "accept"
-  chain            = "forward"
-  comment          = "DMZ to Prod: qBittorrent Backend (Reverse Proxy)"
-  src_address_list = routeros_ip_firewall_addr_list.dmz_network.list
-  dst_address      = "10.20.0.101"
-  protocol         = "tcp"
-  dst_port         = "8080"
-  place_before     = routeros_ip_firewall_filter.allow_dmz_to_ra_http.id
-}
-
-resource "routeros_ip_firewall_filter" "allow_dmz_to_ra_http" {
-  action           = "accept"
-  chain            = "forward"
-  comment          = "DMZ to Prod: Radarr Backend (Reverse Proxy)"
-  src_address_list = routeros_ip_firewall_addr_list.dmz_network.list
-  dst_address      = "10.20.0.101"
-  protocol         = "tcp"
-  dst_port         = "7878"
-  place_before     = routeros_ip_firewall_filter.allow_dmz_to_sa_http.id
-}
-
-resource "routeros_ip_firewall_filter" "allow_dmz_to_sa_http" {
-  action           = "accept"
-  chain            = "forward"
-  comment          = "DMZ to Prod: Sonarr Backend (Reverse Proxy)"
-  src_address_list = routeros_ip_firewall_addr_list.dmz_network.list
-  dst_address      = "10.20.0.101"
-  protocol         = "tcp"
-  dst_port         = "8989"
+  dst_address_list = "Reverse_Proxy_Targets"
+  dst_port = "80,443,3001,5900-5999,7878,8000,8006,8080,8096,8989,32000"
   place_before     = routeros_ip_firewall_filter.drop_dmz_to_internal.id
 }
 
@@ -383,14 +338,25 @@ resource "routeros_ip_firewall_filter" "drop_all_wan_not_dstnat" {
 }
 
 resource "routeros_ip_firewall_filter" "z_drop_all_forward" {
-  action  = "drop"
-  chain   = "forward"
+  action = "drop"
+  chain  = "forward"
+  log    = "true"
+  log_prefix = "FW_DROP: "
   comment = "DROP EVERYTHING ELSE - FINAL ZERO TRUST POLICY"
 }
 
 # ===============================================
 # Firewall NAT (DST-NAT/SRC-NAT)
 # ===============================================
+
+resource "routeros_ip_firewall_nat" "hairpin_generic" {
+  action      = "masquerade"
+  chain       = "srcnat"
+  comment     = "Hairpin NAT: Internal to DMZ via Public IP"
+  src_address = "10.0.0.0/8"
+  dst_address = "10.30.0.2"
+  out_interface = routeros_interface_bridge.bridge.name
+}
 
 resource "routeros_ip_firewall_nat" "hairpin_srcnat_fritzbox_to_dmz" {
   action        = "masquerade"
@@ -411,8 +377,6 @@ resource "routeros_ip_firewall_nat" "hairpin_srcnat_fritzbox_to_prod" {
   out_interface = routeros_interface_bridge.bridge.name
   place_before  = routeros_ip_firewall_nat.masquerade.id
 }
-
-# --- DEINE BESTEHENDEN NAT REGELN ---
 
 resource "routeros_ip_firewall_nat" "masquerade" {
   chain              = "srcnat"
@@ -483,10 +447,38 @@ resource "routeros_ip_firewall_nat" "redirect_wan_dns_to_adguard_udp" {
   to_ports          = "53"
 }
 
+resource "routeros_ip_firewall_nat" "force_dns_internal" {
+  action             = "dst-nat"
+  chain              = "dstnat"
+  comment            = "Force Internal DNS to AdGuard"
+  in_interface_list  = "LAN"
+  dst_address        = "!10.20.0.3"
+  protocol           = "udp"
+  dst_port           = "53"
+  to_addresses       = "10.20.0.3"
+}
+
 # ===============================================
 # IPv6 Settings
 # ===============================================
 
 resource "routeros_ipv6_settings" "disable" {
   disable_ipv6 = "true"
+}
+
+# ===============================================
+# System Logging (Firewall Drops)
+# ===============================================
+
+resource "routeros_system_logging_action" "fw_drop_action" {
+  name                = "fwtodisk"
+  target              = "disk"
+  disk_file_name      = "fw_drops"
+  disk_lines_per_file = 1000
+  disk_file_count     = 2
+}
+
+resource "routeros_system_logging" "fw_drop_rule" {
+  action = routeros_system_logging_action.fw_drop_action.name
+  topics = ["firewall", "info"]
 }

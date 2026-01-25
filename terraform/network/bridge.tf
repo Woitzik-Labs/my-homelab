@@ -4,9 +4,10 @@ import {
 }
 
 resource "routeros_interface_bridge" "bridge" {
-  name           = "bridge"
-  admin_mac      = "DC:2C:6E:45:CD:5F"
-  vlan_filtering = true
+  name              = "bridge"
+  admin_mac         = "DC:2C:6E:45:CD:5F"
+  vlan_filtering    = true
+  ingress_filtering = true
 }
 
 import {
@@ -39,4 +40,5 @@ resource "routeros_interface_bridge_port" "bridge_ports" {
   interface = each.key
   comment   = each.value.comment
   pvid      = each.value.pvid
+  hw        = true
 }

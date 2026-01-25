@@ -1,50 +1,90 @@
-resource "routeros_interface_list_member" "lan_vlan10" {
-  interface = routeros_interface_vlan.vlan10.name
-  list      = routeros_interface_list.lan.name
+locals {
+  vlans = {
+    "10" = { 
+      name        = "vlan10"
+      address     = "10.10.0.1/24"
+      network     = "10.10.0.0/24"
+      pool_range  = "10.10.0.10-10.10.0.254"
+      dns_servers = ["10.20.0.3", "1.1.1.1"]
+      tagged      = ["bridge"]
+      untagged    = ["ether2"]
+    }
+    "20" = { 
+      name        = "vlan20"
+      address     = "10.20.0.1/24"
+      network     = "10.20.0.0/24"
+      pool_range  = "10.20.0.10-10.20.0.254"
+      dns_servers = ["10.20.0.3", "1.1.1.1"]
+      tagged      = ["bridge", "ether7"]
+      untagged    = ["ether5", "ether6"]
+    }
+    "30" = { 
+      name        = "vlan30"
+      address     = "10.30.0.1/24"
+      network     = "10.30.0.0/24"
+      pool_range  = "10.30.0.10-10.30.0.254"
+      dns_servers = ["10.20.0.3", "1.1.1.1"]
+      tagged      = ["bridge", "ether7"]
+      untagged    = ["ether8"]
+    }
+  }
 }
-resource "routeros_interface_vlan" "vlan10" {
-  name      = "vlan10"
-  vlan_id   = 10
+
+resource "routeros_ip_dhcp_client" "wan" {
+  interface = "ether1"
+}
+
+# --- VLAN INTERFACES ---
+resource "routeros_interface_vlan" "vlan" {
+  for_each  = local.vlans
+  name      = each.value.name
+  vlan_id   = each.key
   interface = routeros_interface_bridge.bridge.name
 }
 
-resource "routeros_interface_list_member" "lan_vlan20" {
-  interface = routeros_interface_vlan.vlan20.name
+# --- IP ADDRESSES ---
+resource "routeros_ip_address" "vlan_ips" {
+  for_each  = local.vlans
+  address   = each.value.address
+  interface = routeros_interface_vlan.vlan[each.key].name
+}
+
+# --- DHCP POOLS ---
+resource "routeros_ip_pool" "vlan_pools" {
+  for_each = local.vlans
+  name     = "${each.value.name}_pool"
+  ranges   = [each.value.pool_range]
+}
+
+# --- DHCP SERVER ---
+resource "routeros_ip_dhcp_server" "vlan_dhcps" {
+  for_each     = local.vlans
+  interface    = routeros_interface_vlan.vlan[each.key].name
+  name         = "${each.value.name}_dhcp"
+  address_pool = routeros_ip_pool.vlan_pools[each.key].name
+  disabled     = false
+}
+
+# --- DHCP NETWORKS ---
+resource "routeros_ip_dhcp_server_network" "vlan_networks" {
+  for_each   = local.vlans
+  address    = each.value.network
+  gateway    = split("/", each.value.address)[0]
+  dns_server = each.value.dns_servers
+}
+
+# --- INTERFACE LIST MEMBERS ---
+resource "routeros_interface_list_member" "lan_vlan_members" {
+  for_each  = local.vlans
+  interface = routeros_interface_vlan.vlan[each.key].name
   list      = routeros_interface_list.lan.name
 }
-resource "routeros_interface_vlan" "vlan20" {
-  name      = "vlan20"
-  vlan_id   = 20
-  interface = routeros_interface_bridge.bridge.name
-}
 
-resource "routeros_interface_list_member" "lan_vlan30" {
-  interface = routeros_interface_vlan.vlan30.name
-  list      = routeros_interface_list.lan.name
-}
-resource "routeros_interface_vlan" "vlan30" {
-  name      = "vlan30"
-  vlan_id   = 30
-  interface = routeros_interface_bridge.bridge.name
-}
-
-resource "routeros_interface_bridge_vlan" "vlan10" {
+# --- BRIDGE VLAN SETTINGS ---
+resource "routeros_interface_bridge_vlan" "vlan_config" {
+  for_each = local.vlans
   bridge   = routeros_interface_bridge.bridge.name
-  vlan_ids = [10]
-  tagged   = [routeros_interface_bridge.bridge.name]
-  untagged = ["ether2"]
-}
-
-resource "routeros_interface_bridge_vlan" "vlan20" {
-  bridge   = routeros_interface_bridge.bridge.name
-  vlan_ids = [20]
-  tagged = [routeros_interface_bridge.bridge.name,"ether7"]
-  untagged = ["ether5","ether6"]
-}
-
-resource "routeros_interface_bridge_vlan" "vlan30" {
-  bridge   = routeros_interface_bridge.bridge.name
-  vlan_ids = [30]
-  tagged = [routeros_interface_bridge.bridge.name,"ether7"]
-  untagged = ["ether8"]
+  vlan_ids = [each.key]
+  tagged   = each.value.tagged
+  untagged = each.value.untagged
 }
